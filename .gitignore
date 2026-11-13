@@ -31,3 +31,6 @@ bin/
 
 # Local data
 data/
+
+# Lecture materials / assignment PDFs (do not upload)
+*.pdf
