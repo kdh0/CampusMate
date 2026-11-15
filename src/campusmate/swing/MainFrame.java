@@ -1,281 +1,184 @@
 package campusmate.swing;
 
-import campusmate.model.Deadline;
-import campusmate.model.TodoItem;
-import campusmate.service.PlannerService;
-import campusmate.storage.FileRepository;
+import campusmate.model.Category;
+import campusmate.model.Task;
+import campusmate.service.TaskManager;
+import campusmate.storage.FileStore;
 import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.Font;
 import java.awt.GridLayout;
-import java.awt.event.InputEvent;
-import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 import javax.swing.BorderFactory;
+import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.JMenu;
-import javax.swing.JMenuBar;
-import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JTabbedPane;
-import javax.swing.KeyStroke;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
 
 /**
- * 메인 창. 탭 6개를 담고, 데이터가 바뀌면 저장 후 모든 탭을 새로 그리는 '중앙 관리자' 역할을 한다.
- * 각 탭(패널)은 데이터를 바꾼 뒤 frame.dataChanged()만 부르면 된다.
+ * 2단계 Swing 버전의 메인 창. 위쪽에 오늘 진행률, 가운데에 탭 3개(할 일 목록 / 달력 / 통계).
+ * 각 탭은 데이터를 바꾼 뒤 frame.dataChanged()만 부르면 저장과 화면 새로 고침이 된다.
  */
 public class MainFrame extends JFrame {
-    /** 시작할 때 이 일수 이내에 마감하는 일정이 있으면 알림 창을 띄운다. */
-    private static final int ALERT_DAYS = 3;
+    private final TaskManager manager;
+    private final FileStore store;
 
-    private final PlannerService service;
-    private final FileRepository repository;
-
-    private final JLabel summaryLabel = new JLabel();
-    private final JProgressBar todayProgress = new JProgressBar(0, 100);
-    private final JLabel statusLabel = new JLabel();
-    private final JTabbedPane tabs = new JTabbedPane();
-
-    private final DayPanel dayPanel;
+    private final JProgressBar todayBar = new JProgressBar(0, 100);
+    private final TaskPanel taskPanel;
     private final CalendarPanel calendarPanel;
     private final StatsPanel statsPanel;
-    private final SearchPanel searchPanel;
-    private final DeadlinePanel deadlinePanel;
-    private final CoursePanel coursePanel;
 
-    public MainFrame(PlannerService service, FileRepository repository) {
-        super("CampusMate - 대학생 하루 플래너");
-        this.service = service;
-        this.repository = repository;
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            FileStore store = new FileStore(FileStore.DEFAULT_PATH);
+            try {
+                MainFrame frame = new MainFrame(new TaskManager(store.load()), store);
+                frame.setVisible(true);
+                frame.startupCheck();
+            } catch (IOException e) {
+                // 파일을 덮어쓰지 않도록 창을 열지 않고 끝낸다.
+                JOptionPane.showMessageDialog(null, "데이터를 불러오지 못했습니다.\n" + e.getMessage());
+            }
+        });
+    }
 
-        dayPanel = new DayPanel(this);
+    public MainFrame(TaskManager manager, FileStore store) {
+        super("CampusMate - 대학생 과제·할 일 플래너");
+        this.manager = manager;
+        this.store = store;
+
+        taskPanel = new TaskPanel(this);
         calendarPanel = new CalendarPanel(this);
         statsPanel = new StatsPanel(this);
-        searchPanel = new SearchPanel(this);
-        deadlinePanel = new DeadlinePanel(this);
-        coursePanel = new CoursePanel(this);
-
-        tabs.addTab("하루 계획", dayPanel);
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.addTab("할 일 목록", taskPanel);
         tabs.addTab("달력", calendarPanel);
-        tabs.addTab("기록·통계", statsPanel);
-        tabs.addTab("검색", searchPanel);
-        tabs.addTab("마감 일정", deadlinePanel);
-        tabs.addTab("과목", coursePanel);
+        tabs.addTab("통계", statsPanel);
 
-        setLayout(new BorderLayout());
-        add(createHeader(), BorderLayout.NORTH);
+        todayBar.setStringPainted(true);
+        JPanel header = new JPanel(new BorderLayout(10, 0));
+        header.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+        header.add(new JLabel("오늘 " + LocalDate.now() + "  진행률"), BorderLayout.WEST);
+        header.add(todayBar, BorderLayout.CENTER);
+
+        add(header, BorderLayout.NORTH);
         add(tabs, BorderLayout.CENTER);
-        add(createStatusBar(), BorderLayout.SOUTH);
-        setJMenuBar(createMenuBar());
 
-        // X 버튼을 누르면 바로 닫지 않고 저장부터 한다.
-        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        // 창을 닫을 때 자동 저장 (WindowListener)
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
-            public void windowClosing(WindowEvent e) { exitProgram(); }
+            public void windowClosing(WindowEvent e) { save(); }
         });
 
-        setSize(1100, 720);
-        setMinimumSize(new Dimension(900, 600));
+        setSize(1000, 650);
         setLocationRelativeTo(null); // 화면 가운데
-        statusLabel.setText("  저장 위치: " + repository.getPath());
         refreshAll();
     }
 
-    public PlannerService getService() { return service; }
+    public TaskManager getManager() { return manager; }
 
-    // ======================= 화면 구성 =======================
-
-    private JPanel createHeader() {
-        JPanel header = new JPanel(new BorderLayout());
-        header.setBackground(SwingUtil.HEADER_COLOR);
-        header.setBorder(BorderFactory.createEmptyBorder(12, 18, 12, 18));
-
-        JLabel title = new JLabel("CampusMate");
-        title.setForeground(Color.WHITE);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 24f));
-        JLabel today = new JLabel("오늘 " + SwingUtil.LONG_DATE.format(LocalDate.now()));
-        today.setForeground(new Color(200, 210, 220));
-
-        JPanel left = new JPanel(new GridLayout(2, 1));
-        left.setOpaque(false);
-        left.add(title);
-        left.add(today);
-
-        summaryLabel.setForeground(Color.WHITE);
-        todayProgress.setStringPainted(true);
-        todayProgress.setPreferredSize(new Dimension(280, 22));
-        JPanel right = new JPanel(new GridLayout(2, 1, 0, 4));
-        right.setOpaque(false);
-        right.add(summaryLabel);
-        right.add(todayProgress);
-
-        header.add(left, BorderLayout.WEST);
-        header.add(right, BorderLayout.EAST);
-        return header;
-    }
-
-    private JPanel createStatusBar() {
-        JPanel bar = new JPanel(new BorderLayout());
-        bar.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 8));
-        statusLabel.setForeground(Color.DARK_GRAY);
-        bar.add(statusLabel, BorderLayout.WEST);
-        return bar;
-    }
-
-    private JMenuBar createMenuBar() {
-        JMenu fileMenu = new JMenu("파일");
-        JMenuItem saveItem = new JMenuItem("저장");
-        saveItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK)); // Ctrl+S
-        saveItem.addActionListener(e -> save());
-        JMenuItem exitItem = new JMenuItem("종료");
-        exitItem.addActionListener(e -> exitProgram());
-        fileMenu.add(saveItem);
-        fileMenu.addSeparator();
-        fileMenu.add(exitItem);
-
-        JMenu viewMenu = new JMenu("보기");
-        JMenuItem todayItem = new JMenuItem("오늘 계획으로 이동");
-        todayItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_T, InputEvent.CTRL_DOWN_MASK)); // Ctrl+T
-        todayItem.addActionListener(e -> showDay(LocalDate.now()));
-        JMenuItem overdueItem = new JMenuItem("못 한 일 처리하기");
-        overdueItem.addActionListener(e -> handleOverdue(true));
-        JMenuItem alertItem = new JMenuItem("마감 임박 알림 보기");
-        alertItem.addActionListener(e -> showDeadlineAlert(true));
-        viewMenu.add(todayItem);
-        viewMenu.add(overdueItem);
-        viewMenu.add(alertItem);
-
-        JMenuBar bar = new JMenuBar();
-        bar.add(fileMenu);
-        bar.add(viewMenu);
-        return bar;
-    }
-
-    // ======================= 다른 패널들이 호출하는 공통 기능 =======================
-
-    /** 데이터를 바꾼 뒤 호출: 파일에 저장하고 모든 화면을 새로 고친다. */
+    /** 데이터를 바꾼 뒤 호출: 파일에 저장하고 모든 탭을 새로 그린다. */
     public void dataChanged() {
         save();
         refreshAll();
     }
 
-    public void refreshAll() {
-        dayPanel.refresh();
+    private void refreshAll() {
+        taskPanel.refresh();
         calendarPanel.refresh();
         statsPanel.refresh();
-        searchPanel.refresh();
-        deadlinePanel.refresh();
-        coursePanel.refresh();
 
-        LocalDate today = LocalDate.now();
-        List<TodoItem> todos = service.getTodos(today);
-        int done = 0;
-        for (TodoItem todo : todos) if (todo.isDone()) done++;
-        todayProgress.setValue(SwingUtil.percent(done, todos.size()));
-        todayProgress.setString(todos.isEmpty() ? "오늘 계획이 아직 없습니다"
-                : "오늘 " + done + "/" + todos.size() + " 완료 (" + SwingUtil.percent(done, todos.size()) + "%)");
-        summaryLabel.setText("연속 달성 " + service.getStreak(today) + "일 · 다가오는 마감 "
-                + service.getUpcomingDeadlines(today).size() + "건");
+        List<Task> today = manager.getByDate(LocalDate.now());
+        int done = TaskManager.countDone(today);
+        todayBar.setValue(TaskManager.percent(done, today.size()));
+        todayBar.setString("오늘 할 일 " + done + "/" + today.size() + " 완료 (" + todayBar.getValue() + "%)");
     }
 
-    /** '하루 계획' 탭으로 가서 해당 날짜를 보여 준다. (달력 등에서 사용) */
-    public void showDay(LocalDate date) {
-        dayPanel.showDate(date);
-        tabs.setSelectedComponent(dayPanel);
-    }
-
-    public void showCourseTab() { tabs.setSelectedComponent(coursePanel); }
-
-    public void openTodoDialog(TodoItem todo) {
-        TodoDialog dialog = new TodoDialog(this, service, todo);
-        dialog.setVisible(true); // 모달 창이므로 닫힐 때까지 여기서 기다린다.
-        if (dialog.isSaved()) dataChanged();
-    }
-
-    public void deleteTodo(TodoItem todo) {
-        int answer = JOptionPane.showConfirmDialog(this, "'" + todo.getContent() + "' 할 일을 삭제할까요?",
-                "삭제 확인", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (answer == JOptionPane.YES_OPTION) {
-            service.deleteTodo(todo.getId());
-            dataChanged();
-        }
-    }
-
-    public boolean save() {
+    private void save() {
         try {
-            repository.save(service);
-            statusLabel.setText("  저장 위치: " + repository.getPath() + "   |   마지막 저장 "
-                    + LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-            return true;
+            store.save(manager.getAll());
         } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "저장에 실패했습니다.\n" + e.getMessage(),
-                    "저장 오류", JOptionPane.ERROR_MESSAGE);
-            return false;
+            JOptionPane.showMessageDialog(this, "저장에 실패했습니다.\n" + e.getMessage());
         }
     }
 
-    // ======================= 시작할 때 확인 =======================
-
-    /** 프로그램을 켰을 때: 못 한 일 처리 → 마감 임박 알림 순서로 보여 준다. */
-    public void runStartupChecks() {
-        handleOverdue(false);
-        showDeadlineAlert(false);
-    }
-
-    /** 지난 날짜에 끝내지 못한 할 일이 있으면, 오늘로 옮길 항목을 고르는 창을 띄운다. */
-    private void handleOverdue(boolean fromMenu) {
-        List<TodoItem> overdue = service.getOverdueTodos(LocalDate.now());
-        if (overdue.isEmpty()) {
-            if (fromMenu) JOptionPane.showMessageDialog(this, "처리할 지난 할 일이 없습니다.");
-            return;
-        }
-        OverdueDialog dialog = new OverdueDialog(this, service, overdue);
-        dialog.setVisible(true);
-        if (dialog.isConfirmed()) dataChanged();
-    }
-
-    /** 마감 임박(기한 지남 + ALERT_DAYS일 이내) 일정을 알림 창으로 보여 준다. */
-    private void showDeadlineAlert(boolean fromMenu) {
+    /** 시작할 때: 지난 할 일 오늘로 옮기기 → 마감 임박 알림 */
+    private void startupCheck() {
         LocalDate today = LocalDate.now();
-        List<Deadline> soon = new ArrayList<>();
-        for (Deadline d : service.getUpcomingDeadlines(today)) {
-            if (d.daysUntil(today) <= ALERT_DAYS) soon.add(d);
+
+        List<Task> overdue = manager.getOverdueTodos(today);
+        if (!overdue.isEmpty()) {
+            StringBuilder msg = new StringBuilder("지난 날 못 한 할 일이 " + overdue.size() + "개 있습니다.\n\n");
+            for (Task task : overdue) msg.append("· ").append(task.getDate()).append("  ").append(task.getTitle()).append("\n");
+            msg.append("\n모두 오늘로 옮길까요?");
+            int answer = JOptionPane.showConfirmDialog(this, msg.toString(), "지난 할 일", JOptionPane.YES_NO_OPTION);
+            if (answer == JOptionPane.YES_OPTION) {
+                for (Task task : overdue) manager.moveToToday(task.getId(), today);
+                dataChanged();
+            }
         }
-        if (soon.isEmpty()) {
-            if (fromMenu) JOptionPane.showMessageDialog(this, ALERT_DAYS + "일 이내에 마감하는 일정이 없습니다.");
-            return;
+
+        List<Task> soon = manager.getUpcomingDeadlines(today);
+        if (!soon.isEmpty()) {
+            StringBuilder msg = new StringBuilder(TaskManager.ALERT_DAYS + "일 안에 마감하는 일정이 있습니다.\n\n");
+            for (Task task : soon) {
+                msg.append("[").append(task.getDday(today)).append("] ").append(task.getCategory()).append(" · ")
+                        .append(task.getCourse()).append(" ").append(task.getTitle()).append("\n");
+            }
+            JOptionPane.showMessageDialog(this, msg.toString(), "마감 임박 알림", JOptionPane.WARNING_MESSAGE);
         }
-        StringBuilder sb = new StringBuilder("<html><b>" + ALERT_DAYS + "일 이내 마감 일정 " + soon.size() + "건</b><br><br>");
-        for (Deadline d : soon) {
-            String color = d.daysUntil(today) < 0 ? "#c0392b" : "#d35400";
-            sb.append("<font color='").append(color).append("'>[").append(d.getDday(today)).append("]</font> ")
-                    .append(SwingUtil.escape(service.getCourseName(d.getCourseId()))).append(" · ")
-                    .append(SwingUtil.escape(d.getTitle())).append("<br>");
-        }
-        sb.append("</html>");
-        JOptionPane.showMessageDialog(this, sb.toString(), "마감 임박 알림", JOptionPane.WARNING_MESSAGE);
     }
 
-    private void exitProgram() {
-        if (!save()) {
-            int answer = JOptionPane.showConfirmDialog(this,
-                    "저장하지 못했습니다. 그래도 종료할까요? (변경 내용이 사라질 수 있습니다)",
-                    "종료 확인", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-            if (answer != JOptionPane.YES_OPTION) return;
+    /**
+     * 추가/수정 입력 창 (할 일 목록 탭, 달력 탭에서 함께 사용).
+     * @param task 수정할 항목. null이면 새로 추가한다.
+     * @param date 추가할 때 기본 날짜
+     */
+    public void openTaskForm(Task task, LocalDate date) {
+        JTextField titleField = new JTextField(task == null ? "" : task.getTitle(), 20);
+        // 과목: 목록(Set)에서 고르거나 새 이름을 직접 입력할 수 있다.
+        JComboBox<String> courseBox = new JComboBox<>(manager.getCourses().toArray(new String[0]));
+        courseBox.setEditable(true);
+        courseBox.setSelectedItem(task == null ? "" : task.getCourse());
+        JComboBox<Category> categoryBox = new JComboBox<>(Category.values());
+        if (task != null) categoryBox.setSelectedItem(task.getCategory());
+        JTextField dateField = new JTextField(task == null ? date.toString() : task.getDate().toString());
+
+        JPanel form = new JPanel(new GridLayout(0, 2, 6, 6));
+        form.add(new JLabel("내용"));
+        form.add(titleField);
+        form.add(new JLabel("과목"));
+        form.add(courseBox);
+        form.add(new JLabel("종류"));
+        form.add(categoryBox);
+        form.add(new JLabel("날짜/마감일 (예: 11/20, +3)"));
+        form.add(dateField);
+
+        // 잘못 입력하면 안내 후 같은 창을 다시 띄운다. (입력한 내용은 그대로 남아 있음)
+        while (true) {
+            int answer = JOptionPane.showConfirmDialog(this, form, task == null ? "추가" : "수정",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+            if (answer != JOptionPane.OK_OPTION) return;
+            try {
+                LocalDate newDate = TaskManager.parseDate(dateField.getText(), LocalDate.now());
+                if (newDate == null) throw new IllegalArgumentException("날짜 형식을 확인해 주세요. (예: 2026-11-20, 11/20, +3)");
+                String course = courseBox.getEditor().getItem().toString();
+                Category category = (Category) categoryBox.getSelectedItem();
+                if (task == null) manager.add(titleField.getText(), course, category, newDate);
+                else manager.update(task.getId(), titleField.getText(), course, category, newDate);
+                dataChanged();
+                return;
+            } catch (IllegalArgumentException e) {
+                JOptionPane.showMessageDialog(this, e.getMessage(), "입력 확인", JOptionPane.WARNING_MESSAGE);
+            }
         }
-        dispose();
-        System.exit(0);
     }
 }
