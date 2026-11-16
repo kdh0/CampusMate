@@ -98,7 +98,7 @@ public class TaskPanel extends JPanel {
         if (statusBox.getSelectedIndex() == 1) done = false;
         if (statusBox.getSelectedIndex() == 2) done = true;
 
-        shown = manager.search(keywordField.getText(), category, done);
+        shown = manager.searchKeyword(keywordField.getText(), category, done);
         model.fireTableDataChanged(); // 표에 "데이터가 바뀌었으니 다시 그려라"라고 알린다.
     }
 

@@ -3,21 +3,27 @@ package campusmate.model;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 
-/** 할 일 하나. 과제·시험이면 date가 마감일이다. */
+/**
+ * 할 일 하나.
+ * date    = 목록에 나오는 날 (할 일·과제: 할 날, 시험: 시험 날)
+ * dueDate = 과제의 마감일 (할 일·시험은 null)
+ */
 public class Task {
     private final int id;
     private String title;
     private String course;      // 과목 이름 ("" = 과목 없음)
     private Category category;
     private LocalDate date;
+    private LocalDate dueDate;
     private boolean done;
 
-    public Task(int id, String title, String course, Category category, LocalDate date, boolean done) {
+    public Task(int id, String title, String course, Category category, LocalDate date, LocalDate dueDate, boolean done) {
         this.id = id;
         setTitle(title);
         setCourse(course);
         setCategory(category);
         setDate(date);
+        setDueDate(dueDate);
         setDone(done);
     }
 
@@ -26,6 +32,7 @@ public class Task {
     public String getCourse() { return course; }
     public Category getCategory() { return category; }
     public LocalDate getDate() { return date; }
+    public LocalDate getDueDate() { return dueDate; }
     public boolean isDone() { return done; }
 
     public void setTitle(String title) {
@@ -46,10 +53,22 @@ public class Task {
         this.date = date;
     }
 
+    public void setDueDate(LocalDate dueDate) { this.dueDate = dueDate; }
+
     public void setDone(boolean done) { this.done = done; }
 
-    /** 남은 일수. 지났으면 음수. */
-    public long daysLeft(LocalDate today) { return ChronoUnit.DAYS.between(today, date); }
+    /** 마감일. 과제 = 마감일(없으면 할 날), 시험 = 시험 날, 할 일 = null */
+    public LocalDate getDeadline() {
+        if (category == Category.EXAM) return date;
+        if (category == Category.ASSIGNMENT) return dueDate != null ? dueDate : date;
+        return null;
+    }
+
+    /** 마감까지 남은 일수. 지났으면 음수. (할 일은 할 날까지) */
+    public long daysLeft(LocalDate today) {
+        LocalDate deadline = getDeadline();
+        return ChronoUnit.DAYS.between(today, deadline != null ? deadline : date);
+    }
 
     /** "D-3", "D-day", "D+2" */
     public String getDday(LocalDate today) {

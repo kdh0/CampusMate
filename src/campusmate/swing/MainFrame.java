@@ -39,7 +39,7 @@ public class MainFrame extends JFrame {
         SwingUtilities.invokeLater(() -> {
             FileStore store = new FileStore(FileStore.DEFAULT_PATH);
             try {
-                MainFrame frame = new MainFrame(new TaskManager(store.load()), store);
+                MainFrame frame = new MainFrame(new TaskManager(store.load(), store.loadCourses()), store);
                 frame.setVisible(true);
                 frame.startupCheck();
             } catch (IOException e) {
@@ -104,19 +104,19 @@ public class MainFrame extends JFrame {
 
     private void save() {
         try {
-            store.save(manager.getAll());
+            store.save(manager.getAll(), manager.getCourses());
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "저장에 실패했습니다.\n" + e.getMessage());
         }
     }
 
-    /** 시작할 때: 지난 할 일 오늘로 옮기기 → 마감 임박 알림 */
+    /** 시작할 때: 지난 일 오늘로 옮기기 → 남은 마감 일정 알림 */
     private void startupCheck() {
         LocalDate today = LocalDate.now();
 
-        List<Task> overdue = manager.getOverdueTodos(today);
+        List<Task> overdue = manager.getOverdue(today);
         if (!overdue.isEmpty()) {
-            StringBuilder msg = new StringBuilder("지난 날 못 한 할 일이 " + overdue.size() + "개 있습니다.\n\n");
+            StringBuilder msg = new StringBuilder("지난 날 못 한 일이 " + overdue.size() + "개 있습니다.\n\n");
             for (Task task : overdue) msg.append("· ").append(task.getDate()).append("  ").append(task.getTitle()).append("\n");
             msg.append("\n모두 오늘로 옮길까요?");
             int answer = JOptionPane.showConfirmDialog(this, msg.toString(), "지난 할 일", JOptionPane.YES_NO_OPTION);
@@ -128,12 +128,12 @@ public class MainFrame extends JFrame {
 
         List<Task> soon = manager.getUpcomingDeadlines(today);
         if (!soon.isEmpty()) {
-            StringBuilder msg = new StringBuilder(TaskManager.ALERT_DAYS + "일 안에 마감하는 일정이 있습니다.\n\n");
+            StringBuilder msg = new StringBuilder("남은 마감 일정입니다.\n\n");
             for (Task task : soon) {
                 msg.append("[").append(task.getDday(today)).append("] ").append(task.getCategory()).append(" · ")
                         .append(task.getCourse()).append(" ").append(task.getTitle()).append("\n");
             }
-            JOptionPane.showMessageDialog(this, msg.toString(), "마감 임박 알림", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(this, msg.toString(), "마감 일정", JOptionPane.WARNING_MESSAGE);
         }
     }
 
@@ -150,7 +150,7 @@ public class MainFrame extends JFrame {
         courseBox.setSelectedItem(task == null ? "" : task.getCourse());
         JComboBox<Category> categoryBox = new JComboBox<>(Category.values());
         if (task != null) categoryBox.setSelectedItem(task.getCategory());
-        JTextField dateField = new JTextField(task == null ? date.toString() : task.getDate().toString());
+        JTextField dateField = new JTextField(TaskManager.formatDate(task == null ? date : task.getDate()));
 
         JPanel form = new JPanel(new GridLayout(0, 2, 6, 6));
         form.add(new JLabel("내용"));
@@ -159,7 +159,7 @@ public class MainFrame extends JFrame {
         form.add(courseBox);
         form.add(new JLabel("종류"));
         form.add(categoryBox);
-        form.add(new JLabel("날짜/마감일 (예: 11/20, +3)"));
+        form.add(new JLabel("날짜/마감일 (예: 11/20)"));
         form.add(dateField);
 
         // 잘못 입력하면 안내 후 같은 창을 다시 띄운다. (입력한 내용은 그대로 남아 있음)
@@ -169,11 +169,12 @@ public class MainFrame extends JFrame {
             if (answer != JOptionPane.OK_OPTION) return;
             try {
                 LocalDate newDate = TaskManager.parseDate(dateField.getText(), LocalDate.now());
-                if (newDate == null) throw new IllegalArgumentException("날짜 형식을 확인해 주세요. (예: 2026-11-20, 11/20, +3)");
+                if (newDate == null) throw new IllegalArgumentException("날짜는 11/20처럼 월/일로 입력해 주세요.");
                 String course = courseBox.getEditor().getItem().toString();
                 Category category = (Category) categoryBox.getSelectedItem();
-                if (task == null) manager.add(titleField.getText(), course, category, newDate);
-                else manager.update(task.getId(), titleField.getText(), course, category, newDate);
+                // Swing은 아직 날짜 칸이 하나뿐이라 마감일은 따로 넣지 않는다. (과제는 할 날 = 마감일)
+                if (task == null) manager.add(titleField.getText(), course, category, newDate, null);
+                else manager.update(task.getId(), titleField.getText(), course, category, newDate, null);
                 dataChanged();
                 return;
             } catch (IllegalArgumentException e) {

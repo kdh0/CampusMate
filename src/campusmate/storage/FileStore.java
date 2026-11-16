@@ -10,18 +10,25 @@ import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * 할 일 목록을 텍스트 파일에 한 줄에 하나씩 저장한다. 칸은 탭으로 나눈다.
- * 형식: 번호  날짜  종류  완료여부  과목  내용
- * 예)   3    2026-11-20  ASSIGNMENT  false  자료구조  연결리스트 과제
+ * 형식: 번호  날짜  종류  완료여부  과목  내용  마감일(과제만)
+ * 예)   3    2026-11-18  ASSIGNMENT  false  자료구조  연결리스트 과제  2026-11-20
+ * 과목 목록은 같은 폴더의 courses.txt에 한 줄에 하나씩 저장한다.
  */
 public class FileStore {
     public static final String DEFAULT_PATH = "data/campusmate.txt";
 
     private final Path path;
+    private final Path coursePath;
 
-    public FileStore(String path) { this.path = Paths.get(path).toAbsolutePath(); }
+    public FileStore(String path) {
+        this.path = Paths.get(path).toAbsolutePath();
+        this.coursePath = this.path.resolveSibling("courses.txt");
+    }
 
     public Path getPath() { return path; }
 
@@ -36,8 +43,10 @@ public class FileStore {
             if (line.isBlank()) continue;
             String[] f = line.split("\t", -1);
             try {
+                // 예전 파일에는 마감일 칸이 없다. → 없으면 null
+                LocalDate dueDate = f.length > 6 && !f[6].isEmpty() ? LocalDate.parse(f[6]) : null;
                 tasks.add(new Task(Integer.parseInt(f[0]), f[5], f[4], Category.valueOf(f[2]),
-                        LocalDate.parse(f[1]), Boolean.parseBoolean(f[3])));
+                        LocalDate.parse(f[1]), dueDate, Boolean.parseBoolean(f[3])));
             } catch (RuntimeException e) { // 칸 부족, 숫자/날짜/종류 오류 등
                 throw new IOException((i + 1) + "번째 줄 형식이 올바르지 않습니다: " + line);
             }
@@ -45,13 +54,25 @@ public class FileStore {
         return tasks;
     }
 
-    public void save(List<Task> tasks) throws IOException {
+    /** 과목 목록을 읽는다. 파일이 없으면 빈 Set. */
+    public Set<String> loadCourses() throws IOException {
+        Set<String> courses = new TreeSet<>();
+        if (Files.notExists(coursePath)) return courses;
+        for (String line : Files.readAllLines(coursePath, StandardCharsets.UTF_8)) {
+            if (!line.isBlank()) courses.add(line.trim());
+        }
+        return courses;
+    }
+
+    public void save(List<Task> tasks, Set<String> courses) throws IOException {
         List<String> lines = new ArrayList<>();
         for (Task t : tasks) {
+            String dueDate = t.getDueDate() == null ? "" : t.getDueDate().toString();
             lines.add(t.getId() + "\t" + t.getDate() + "\t" + t.getCategory().name() + "\t"
-                    + t.isDone() + "\t" + t.getCourse() + "\t" + t.getTitle());
+                    + t.isDone() + "\t" + t.getCourse() + "\t" + t.getTitle() + "\t" + dueDate);
         }
         Files.createDirectories(path.getParent());
         Files.write(path, lines, StandardCharsets.UTF_8);
+        Files.write(coursePath, courses, StandardCharsets.UTF_8);
     }
 }

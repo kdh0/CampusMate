@@ -13,31 +13,39 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * 핵심 로직: 추가/조회/수정/삭제, 조건 검색, 알림, 통계.
+ * 핵심 로직: 추가/조회/수정/삭제, 조건 검색, 과목 관리, 알림, 통계.
  * 콘솔(ConsoleApp)과 Swing(MainFrame)이 이 클래스를 똑같이 사용한다.
  */
 public class TaskManager {
-    /** 이 일수 이내에 마감하는 과제·시험을 알려 준다. */
-    public static final int ALERT_DAYS = 3;
-
     // Map: ID → 할 일. ID로 바로 찾을 수 있다.
     private final Map<Integer, Task> tasks = new HashMap<>();
+    // Set: 등록된 과목 이름 (중복 없이 가나다순)
+    private final Set<String> courses = new TreeSet<>();
     private int nextId = 1;
 
     /** 파일에서 읽은 목록으로 시작한다. (처음 실행이면 빈 목록) */
-    public TaskManager(List<Task> saved) {
+    public TaskManager(List<Task> saved, Set<String> savedCourses) {
+        courses.addAll(savedCourses);
         for (Task task : saved) {
             tasks.put(task.getId(), task);
             nextId = Math.max(nextId, task.getId() + 1);
+            // 예전 파일에는 과목 목록이 없으므로, 항목에 쓰인 과목도 등록해 둔다.
+            if (!task.getCourse().isEmpty()) courses.add(task.getCourse());
         }
     }
 
     // ======================= CRUD =======================
 
-    public Task add(String title, String course, Category category, LocalDate date) {
-        Task task = new Task(nextId, title, course, category, date, false);
+    /**
+     * @param date    할 날 (시험은 시험 날)
+     * @param dueDate 과제 마감일 (null이면 할 날과 같음). 할 일·시험은 무시한다.
+     */
+    public Task add(String title, String course, Category category, LocalDate date, LocalDate dueDate) {
+        dueDate = checkDates(category, date, dueDate);
+        Task task = new Task(nextId, title, course, category, date, dueDate, false);
         tasks.put(task.getId(), task);
         nextId++;
+        if (!task.getCourse().isEmpty()) courses.add(task.getCourse());
         return task;
     }
 
@@ -54,10 +62,12 @@ public class TaskManager {
         return list;
     }
 
+    /** 그날 목록. 아직 못 끝낸 과제는 마감일에도 나온다. */
     public List<Task> getByDate(LocalDate date) {
         List<Task> result = new ArrayList<>();
         for (Task task : getAll()) {
             if (task.getDate().equals(date)) result.add(task);
+            else if (task.getCategory() == Category.ASSIGNMENT && !task.isDone() && date.equals(task.getDeadline())) result.add(task);
         }
         return result;
     }
@@ -70,12 +80,22 @@ public class TaskManager {
         return result;
     }
 
-    public void update(int id, String title, String course, Category category, LocalDate date) {
+    public void update(int id, String title, String course, Category category, LocalDate date, LocalDate dueDate) {
         Task task = get(id);
+        dueDate = checkDates(category, date, dueDate);
         task.setTitle(title);   // 내용이 비어 있으면 여기서 예외 → 아무것도 바뀌지 않는다.
         task.setCourse(course);
         task.setCategory(category);
         task.setDate(date);
+        task.setDueDate(dueDate);
+        if (!task.getCourse().isEmpty()) courses.add(task.getCourse());
+    }
+
+    /** 날짜를 검사하고, 저장할 마감일을 돌려준다. (과제가 아니면 null) */
+    private LocalDate checkDates(Category category, LocalDate date, LocalDate dueDate) {
+        if (category != Category.ASSIGNMENT || dueDate == null) return null;
+        if (date != null && date.isAfter(dueDate)) throw new IllegalArgumentException("할 날이 마감일보다 늦습니다.");
+        return dueDate;
     }
 
     /** 완료 ↔ 미완료. 바뀐 상태를 돌려준다. */
@@ -93,12 +113,26 @@ public class TaskManager {
     // ======================= 조건 검색 =======================
 
     /**
-     * 조건 검색. null 조건은 '전체'이고, 여러 조건은 모두 만족해야 한다(AND).
-     * @param keyword  내용 또는 과목 이름에 들어 있는 글자
-     * @param category 종류 (null = 전체)
-     * @param done     true = 완료, false = 미완료, null = 전체
+     * 조건 검색 (콘솔). null 조건은 '상관없음'이고, 여러 조건은 모두 만족해야 한다(AND).
+     * @param course   과목 ("" = 과목 없음)
+     * @param category 종류
+     * @param done     true = 완료, false = 미완료
+     * @param when     -1 = 지난 일, 0 = 오늘, 1 = 앞으로 일 (목록에 나오는 날 기준)
      */
-    public List<Task> search(String keyword, Category category, Boolean done) {
+    public List<Task> search(String course, Category category, Boolean done, Integer when, LocalDate today) {
+        List<Task> result = new ArrayList<>();
+        for (Task task : getAll()) {
+            if (course != null && !task.getCourse().equals(course)) continue;
+            if (category != null && task.getCategory() != category) continue;
+            if (done != null && task.isDone() != done) continue;
+            if (when != null && Integer.signum(task.getDate().compareTo(today)) != when) continue;
+            result.add(task);
+        }
+        return result;
+    }
+
+    /** 검색어 검색 (Swing 할 일 목록 탭). 검색어는 내용 또는 과목 이름에서 찾는다. */
+    public List<Task> searchKeyword(String keyword, Category category, Boolean done) {
         String word = keyword == null ? "" : keyword.trim().toLowerCase();
         List<Task> result = new ArrayList<>();
         for (Task task : getAll()) {
@@ -111,39 +145,61 @@ public class TaskManager {
         return result;
     }
 
-    /** Set: 등록된 과목 이름 (중복 없이 가나다순) */
-    public Set<String> getCourses() {
-        Set<String> courses = new TreeSet<>();
+    // ======================= 과목 관리 =======================
+
+    public Set<String> getCourses() { return new TreeSet<>(courses); }
+
+    public void addCourse(String name) {
+        courses.add(checkNewCourse(name));
+    }
+
+    /** 과목 이름을 바꾼다. 그 과목을 쓰는 항목도 함께 바뀐다. */
+    public void renameCourse(String oldName, String newName) {
+        String name = checkNewCourse(newName);
+        if (!courses.remove(oldName)) throw new IllegalArgumentException("없는 과목입니다.");
+        courses.add(name);
         for (Task task : tasks.values()) {
-            if (!task.getCourse().isEmpty()) courses.add(task.getCourse());
+            if (task.getCourse().equals(oldName)) task.setCourse(name);
         }
-        return courses;
+    }
+
+    /** 과목을 지운다. 그 과목의 항목도 함께 지운다. */
+    public void deleteCourse(String name) {
+        if (!courses.remove(name)) throw new IllegalArgumentException("없는 과목입니다.");
+        tasks.values().removeIf(task -> task.getCourse().equals(name));
+    }
+
+    private String checkNewCourse(String name) {
+        String value = name == null ? "" : name.trim();
+        if (value.isEmpty()) throw new IllegalArgumentException("과목 이름을 입력해 주세요.");
+        if (courses.contains(value)) throw new IllegalArgumentException("이미 있는 과목입니다.");
+        return value;
     }
 
     // ======================= 알림 =======================
 
-    /** 오늘부터 ALERT_DAYS일 안에 마감하는, 아직 끝나지 않은 과제·시험 */
+    /** 아직 끝나지 않은 과제·시험 중 마감이 안 지난 것 (마감일 순) */
     public List<Task> getUpcomingDeadlines(LocalDate today) {
         List<Task> result = new ArrayList<>();
         for (Task task : getAll()) {
-            long days = task.daysLeft(today);
-            if (task.getCategory().isDeadline() && !task.isDone() && days >= 0 && days <= ALERT_DAYS) {
-                result.add(task);
-            }
+            if (task.getCategory().isDeadline() && !task.isDone() && task.daysLeft(today) >= 0) result.add(task);
         }
+        result.sort(Comparator.comparing(Task::getDeadline));
         return result;
     }
 
-    /** 날짜가 지났는데 끝내지 못한 '할 일' (과제·시험은 마감일이 고정이라 제외) */
-    public List<Task> getOverdueTodos(LocalDate today) {
+    /** 할 날이 지났는데 끝내지 못한 할 일·과제. (마감이 지난 과제와 시험은 옮길 수 없으니 제외) */
+    public List<Task> getOverdue(LocalDate today) {
         List<Task> result = new ArrayList<>();
         for (Task task : getAll()) {
-            if (task.getCategory() == Category.TODO && task.isOverdue(today)) result.add(task);
+            if (task.getCategory() == Category.EXAM || !task.isOverdue(today)) continue;
+            if (task.getCategory() == Category.ASSIGNMENT && task.daysLeft(today) < 0) continue;
+            result.add(task);
         }
         return result;
     }
 
-    /** 팀 특화 기능: 못 한 할 일을 오늘로 옮긴다. */
+    /** 팀 특화 기능: 못 한 일을 오늘로 옮긴다. (과제의 마감일은 그대로) */
     public void moveToToday(int id, LocalDate today) {
         get(id).setDate(today);
     }
@@ -163,21 +219,21 @@ public class TaskManager {
     }
 
     /**
-     * 날짜 입력을 해석한다. (콘솔·Swing 공통) 해석할 수 없으면 null.
-     * "오늘" / "+3"(3일 뒤) / "-1"(어제) / "11/20"(올해) / "2026-11-20"
+     * 날짜 입력을 해석한다. (콘솔·Swing 공통) "11/20"(월/일, 올해) 형식만 받는다. 아니면 null.
      */
     public static LocalDate parseDate(String text, LocalDate today) {
         String s = text.trim();
+        if (!s.matches("\\d{1,2}/\\d{1,2}")) return null;
+        String[] parts = s.split("/");
         try {
-            if (s.equals("오늘")) return today;
-            if (s.startsWith("+") || s.startsWith("-")) return today.plusDays(Integer.parseInt(s));
-            if (s.matches("\\d{1,2}/\\d{1,2}")) {
-                String[] parts = s.split("/");
-                return LocalDate.of(today.getYear(), Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
-            }
-            return LocalDate.parse(s);
-        } catch (NumberFormatException | DateTimeException e) {
+            return LocalDate.of(today.getYear(), Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
+        } catch (DateTimeException e) { // 13/1, 11/31 같은 없는 날짜
             return null;
         }
+    }
+
+    /** parseDate가 읽을 수 있는 "11/20" 형식으로 바꾼다. */
+    public static String formatDate(LocalDate date) {
+        return date.getMonthValue() + "/" + date.getDayOfMonth();
     }
 }
